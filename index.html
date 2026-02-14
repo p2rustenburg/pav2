@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Paviljoen Rustenburg</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/9.6.1/firebase-app.js";
+        import { getFirestore, doc, getDoc, setDoc, updateDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/9.6.1/firebase-firestore.js";
+
+        // --- PLAK HIERONDER JOUW CONFIGURATIE ---
+        // Import the functions you need from the SDKs you need
+import { initializeApp } from "firebase/app";
+// TODO: Add SDKs for Firebase products that you want to use
+// https://firebase.google.com/docs/web/setup#available-libraries
+
+// Your web app's Firebase configuration
+const firebaseConfig = {
+  apiKey: "AIzaSyD_44Cwl63U3ECuUAMPSKJHvpwDEojSjgM",
+  authDomain: "paviljoen2rustenburg.firebaseapp.com",
+  projectId: "paviljoen2rustenburg",
+  storageBucket: "paviljoen2rustenburg.firebasestorage.app",
+  messagingSenderId: "729047401884",
+  appId: "1:729047401884:web:d4001b920f03d591de3459"
+};
+
+// Initialize Firebase
+const app = initializeApp(firebaseConfig);
+      
+        const firebaseConfig = {
+            apiKey: "AIzaSyB...",
+            authDomain: "project.firebaseapp.com",
+            projectId: "project",
+            storageBucket: "project.appspot.com",
+            messagingSenderId: "123...",
+            appId: "1:123..."
+        };
+        // ----------------------------------------
+
+        const app = initializeApp(firebaseConfig);
+        const db = getFirestore(app);
+
+        // Globale variabelen
+        let kamersData = {};
+        let settingsData = {};
+        const kamerLijst = ["1", "2", "3", "4A", "4B", "5A", "5B", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16", "17", "18"];
+        
+        // Huidige kamer ophalen uit URL (?room=4A)
+        const urlParams = new URLSearchParams(window.location.search);
+        const myRoomID = urlParams.get('room'); 
+
+        // --- FUNCTIES ---
+
+        // 1. Initialisatie: Luister naar database veranderingen (Realtime!)
+        function init() {
+            onSnapshot(doc(db, "paviljoen", "data"), (doc) => {
+                if (doc.exists()) {
+                    const data = doc.data();
+                    kamersData = data.kamers || {};
+                    settingsData = data.settings || {};
+                    renderApp();
+                } else {
+                    // Eerste keer: database vullen
+                    initializeDB();
+                }
+            });
+            fetchWeather();
+        }
+
+        // Database reset/init (eenmalig of via admin)
+        async function initializeDB() {
+            let leegKamers = {};
+            kamerLijst.forEach(k => {
+                leegKamers[k] = { 
+                    naam: "", 
+                    opnameDatum: new Date().toISOString().split('T')[0], 
+                    punten: 0,
+                    beschikbaar: {ma: true, di: true, wo: true, do: true, vr: true}
+                };
+            });
+            await setDoc(doc(db, "paviljoen", "data"), { 
+                kamers: leegKamers,
+                roster: {},
+                settings: { menuUrl: "", announcements: "Welkom in Rustenburg!" }
+            });
+        }
+
+        // 2. Het Weer ophalen (Gratis API: Open-Meteo)
+        async function fetchWeather() {
+            try {
+                // Coördinaten van een willekeurige plek in BE/NL (aanpassen indien nodig)
+                const res = await fetch("https://api.open-meteo.com/v1/forecast?latitude=51.2&longitude=4.4&daily=weathercode,temperature_2m_max,temperature_2m_min&timezone=auto");
+                const data = await res.json();
+                renderWeather(data);
+            } catch (e) { console.log("Weer fout", e); }
+        }
+
+        // 3. Render de App (Alles tonen)
+        function renderApp() {
+            // Toon mededelingen
+            document.getElementById('announcement-text').innerText = settingsData.announcements;
+            
+            // Toon menu foto
+            if(settingsData.menuUrl) {
+                document.getElementById('menu-img').src = settingsData.menuUrl;
+            }
+
+            // Als gebruiker een kamer-link heeft (?room=X), toon dat scherm
+            if (myRoomID && kamersData[myRoomID]) {
+                document.getElementById('patient-section').classList.remove('hidden');
+                document.getElementById('my-room-title').innerText = `Kamer ${myRoomID}`;
+                
+                const k = kamersData[myRoomID];
+                document.getElementById('input-name').value = k.naam;
+                document.getElementById('input-date').value = k.opnameDatum;
+                
+                // Checkboxes zetten
+                ['ma', 'di', 'wo', 'do', 'vr'].forEach(dag => {
+                    document.getElementById(`check-${dag}`).checked = k.beschikbaar[dag];
+                });
+            } else {
+                // Anders toon algemeen rooster
+                document.getElementById('general-section').classList.remove('hidden');
+            }
+
+            // Rooster tonen (Simpele versie: we tonen de gelote namen)
+            renderRosterList();
+        }
+
+        // 4. Update Gegevens (als patiënt iets typt)
+        window.updatePatient = async () => {
+            if (!myRoomID) return;
+            const k = kamersData[myRoomID];
+            k.naam = document.getElementById('input-name').value;
+            k.opnameDatum = document.getElementById('input-date').value;
+            ['ma', 'di', 'wo', 'do', 'vr'].forEach(dag => {
+                k.beschikbaar[dag] = document.getElementById(`check-${dag}`).checked;
+            });
+            
+            // Opslaan in Firebase
+            await updateDoc(doc(db, "paviljoen", "data"), { kamers: kamersData });
+            // Visuele feedback
+            const btn = document.getElementById('save-btn');
+            btn.innerText = "Opgeslagen!";
+            setTimeout(() => btn.innerText = "Opslaan", 2000);
+        };
+
+        // 5. De Loting Logica (Admin Functie)
+        window.runLottery = async () => {
+            const password = prompt("Admin wachtwoord?");
+            if (password !== "admin123") return alert("Fout wachtwoord");
+
+            let pool = [];
+            const vandaag = new Date();
+
+            // Stap A: Wie mag er meedoen?
+            kamerLijst.forEach(id => {
+                const k = kamersData[id];
+                if (!k.naam) return; // Lege kamer
+
+                const opname = new Date(k.opnameDatum);
+                const dagenAanwezig = (vandaag - opname) / (1000 * 60 * 60 * 24);
+
+                // REGEL: Eerste 2 weken (14 dagen) geen dienst
+                if (dagenAanwezig < 14) return;
+
+                // Voeg toe aan pot. Hoe minder punten, hoe meer kans? 
+                // We sorteren straks gewoon op minste punten.
+                pool.push({ id: id, ...k });
+            });
+
+            // Stap B: Sorteren op minste punten (eerlijkheid)
+            // We voegen een klein beetje willekeur toe (random -0.5 tot 0.5) zodat gelijke stand rouleert
+            pool.sort((a, b) => (a.punten + Math.random()) - (b.punten + Math.random()));
+
+            // Stap C: Rooster vullen (Simpel: maandag t/m vrijdag, 3 per dag)
+            let nieuwRooster = { ma: [], di: [], wo: [], do: [], vr: [] };
+            const dagen = ['ma', 'di', 'wo', 'do', 'vr'];
+            
+            // We proberen de pool te verdelen
+            let cursor = 0;
+            
+            for (let dag of dagen) {
+                let mensenNodig = 3;
+                let mensenGevonden = 0;
+                
+                // Probeer mensen te vinden die deze dag beschikbaar zijn
+                // We loopen door de gesorteerde pool
+                for (let i = 0; i < pool.length; i++) {
+                    if (mensenGevonden >= mensenNodig) break;
+                    
+                    let persoon = pool[i];
+                    
+                    // Check of persoon al ingeroosterd is deze week (max 1x per week regel)
+                    let alIngeroosterd = Object.values(nieuwRooster).flat().some(p => p.id === persoon.id);
+                    
+                    if (!alIngeroosterd && persoon.beschikbaar[dag]) {
+                        nieuwRooster[dag].push({ id: persoon.id, naam: persoon.naam });
+                        persoon.punten += 1; // Punt erbij!
+                        mensenGevonden++;
+                    }
+                }
+            }
+
+            // Opslaan in DB
+            await updateDoc(doc(db, "paviljoen", "data"), { 
+                roster: nieuwRooster,
+                kamers: kamersData // Punten zijn geupdate
+            });
+            alert("Nieuwe loting gemaakt en opgeslagen!");
+        };
+
+        // Hulpfunctie voor het weer tonen
+        function renderWeather(data) {
+            const weatherCodes = { 0: "Zonnig", 1: "Licht bewolkt", 3: "Bewolkt", 61: "Regen", 95: "Onweer" }; // Versimpeld
+            const container = document.getElementById('weather-bar');
+            let html = "";
+            
+            // Toon komende 5 dagen
+            for(let i=0; i<5; i++) {
+                const date = new Date(data.daily.time[i]);
+                const dayName = date.toLocaleDateString('nl-NL', { weekday: 'short' });
+                const code = data.daily.weathercode[i];
+                const min = data.daily.temperature_2m_min[i];
+                const max = data.daily.temperature_2m_max[i];
+                
+                html += `
+                    <div class="flex flex-col items-center bg-blue-100 p-2 rounded mx-1 text-xs sm:text-sm">
+                        <span class="font-bold">${dayName}</span>
+                        <span>${weatherCodes[code] || "Wisselvallig"}</span>
+                        <span class="text-gray-600">${Math.round(min)}° / ${Math.round(max)}°</span>
+                    </div>
+                `;
+            }
+            container.innerHTML = html;
+        }
+
+        function renderRosterList() {
+            const container = document.getElementById('roster-display');
+            // We halen het rooster uit settingsData of een aparte sleutel. Hierboven gebruiken we 'roster' in root.
+            // Omdat we in init() data ophalen, moeten we zorgen dat we 'roster' ook uitlezen.
+            // ...Even corrigeren: in init lezen we doc.data(). Laten we roster daaruit pakken.
+            getDoc(doc(db, "paviljoen", "data")).then(snap => {
+                const r = snap.data().roster || {};
+                let html = "";
+                const dagenVoluit = { ma: "Maandag", di: "Dinsdag", wo: "Woensdag", do: "Donderdag", vr: "Vrijdag" };
+                
+                ['ma', 'di', 'wo', 'do', 'vr'].forEach(dag => {
+                    const ploeg = r[dag] || [];
+                    const namen = ploeg.map(p => p.naam).join(", ") || "Nog geen dienst";
+                    html += `
+                        <div class="bg-white p-4 rounded shadow mb-2 border-l-4 border-blue-500">
+                            <h3 class="font-bold text-lg">${dagenVoluit[dag]}</h3>
+                            <p class="text-gray-700">${namen}</p>
+                        </div>
+                    `;
+                });
+                container.innerHTML = html;
+            });
+        }
+
+        // Starten
+        init();
+
+    </script>
+</head>
+<body class="bg-gray-100 text-gray-800 font-sans pb-10">
+
+    <header class="bg-blue-600 text-white p-4 shadow-md">
+        <div class="max-w-3xl mx-auto flex justify-between items-center">
+            <h1 class="text-xl font-bold">Paviljoen Rustenburg</h1>
+            <button onclick="window.runLottery()" class="text-xs bg-blue-800 px-2 py-1 rounded opacity-50 hover:opacity-100">Admin</button>
+        </div>
+    </header>
+
+    <main class="max-w-3xl mx-auto p-4 space-y-6">
+
+        <section id="weather-bar" class="flex justify-between overflow-x-auto pb-2">
+            <div class="text-gray-400 text-sm">Weer laden...</div>
+        </section>
+
+        <section class="bg-yellow-50 border border-yellow-200 p-4 rounded-lg">
+            <h2 class="font-bold text-yellow-800 uppercase text-xs mb-1">Aankondigingen</h2>
+            <p id="announcement-text" class="text-sm">Geen nieuws.</p>
+        </section>
+
+        <section id="patient-section" class="hidden bg-white p-6 rounded-lg shadow-lg border-2 border-blue-500">
+            <h2 id="my-room-title" class="text-2xl font-bold mb-4 text-blue-600">Mijn Kamer</h2>
+            
+            <div class="space-y-4">
+                <div>
+                    <label class="block text-sm font-medium text-gray-700">Mijn Naam</label>
+                    <input type="text" id="input-name" class="mt-1 block w-full border border-gray-300 rounded-md p-2" placeholder="Vul je naam in">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-gray-700">Opnamedatum</label>
+                    <input type="date" id="input-date" class="mt-1 block w-full border border-gray-300 rounded-md p-2">
+                    <p class="text-xs text-gray-500 mt-1">Belangrijk voor je eerste 2 weken vrijstelling.</p>
+                </div>
+
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-2">Ik kan werken op:</label>
+                    <div class="flex justify-between">
+                        <label class="flex flex-col items-center"><input type="checkbox" id="check-ma" class="h-5 w-5 text-blue-600"> <span class="text-xs mt-1">Ma</span></label>
+                        <label class="flex flex-col items-center"><input type="checkbox" id="check-di" class="h-5 w-5 text-blue-600"> <span class="text-xs mt-1">Di</span></label>
+                        <label class="flex flex-col items-center"><input type="checkbox" id="check-wo" class="h-5 w-5 text-blue-600"> <span class="text-xs mt-1">Wo</span></label>
+                        <label class="flex flex-col items-center"><input type="checkbox" id="check-do" class="h-5 w-5 text-blue-600"> <span class="text-xs mt-1">Do</span></label>
+                        <label class="flex flex-col items-center"><input type="checkbox" id="check-vr" class="h-5 w-5 text-blue-600"> <span class="text-xs mt-1">Vr</span></label>
+                    </div>
+                </div>
+
+                <button id="save-btn" onclick="updatePatient()" class="w-full bg-blue-600 text-white py-2 rounded-md font-bold hover:bg-blue-700 transition">Opslaan</button>
+            </div>
+        </section>
+
+        <section id="general-section" class="hidden">
+            <h2 class="text-xl font-bold mb-4">Rooster deze week</h2>
+            <div id="roster-display">
+                </div>
+
+            <div class="mt-8">
+                <h2 class="text-xl font-bold mb-4">Weekmenu</h2>
+                <div class="bg-white p-2 rounded shadow">
+                    <img id="menu-img" src="" alt="Nog geen menu geüpload" class="w-full h-auto rounded">
+                    <p class="text-xs text-gray-400 mt-2 italic">Beheerder kan URL aanpassen in database</p>
+                </div>
+            </div>
+            
+            <div class="mt-8 text-center">
+                <a href="huisregels.pdf" target="_blank" class="text-blue-600 underline">Bekijk Huisregels (PDF)</a>
+            </div>
+        </section>
+
+    </main>
+
+</body>
+</html>
